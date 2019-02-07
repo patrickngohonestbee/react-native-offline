@@ -72,6 +72,7 @@ export function* netInfoChangeSaga({
   pingServerUrl,
   shouldPing,
   httpMethod,
+  shouldDequeueSelector,
 }): Generator<*, *, *> {
   if (Platform.OS === 'android') {
     const initialConnection = yield call([NetInfo, NetInfo.isConnected.fetch]);
@@ -81,6 +82,7 @@ export function* netInfoChangeSaga({
       pingTimeout,
       pingServerUrl,
       httpMethod,
+      shouldDequeueSelector,
     });
   }
   const chan = yield call(
@@ -96,6 +98,7 @@ export function* netInfoChangeSaga({
         pingTimeout,
         pingServerUrl,
         httpMethod,
+        shouldDequeueSelector,
       });
     }
   } finally {
@@ -120,15 +123,17 @@ export function* connectionHandler({
   pingTimeout,
   pingServerUrl,
   httpMethod,
+  shouldDequeueSelector,
 }) {
   if (shouldPing && isConnected) {
     yield fork(checkInternetAccessSaga, {
       pingTimeout,
       pingServerUrl,
       httpMethod,
+      shouldDequeueSelector,
     });
   } else {
-    yield fork(handleConnectivityChange, isConnected);
+    yield fork(handleConnectivityChange, isConnected, shouldDequeueSelector);
   }
 }
 
@@ -149,6 +154,7 @@ export function* connectionIntervalSaga({
   pingOnlyIfOffline,
   pingInBackground,
   httpMethod,
+  shouldDequeueSelector,
 }): Generator<*, *, *> {
   const chan = yield call(
     createIntervalChannel,
@@ -165,6 +171,7 @@ export function* connectionIntervalSaga({
           pingServerUrl,
           httpMethod,
           pingInBackground,
+          shouldDequeueSelector,
         });
       }
     }
@@ -187,6 +194,7 @@ export function* checkInternetAccessSaga({
   pingTimeout,
   httpMethod,
   pingInBackground,
+  shouldDequeueSelector,
 }): Generator<*, *, *> {
   if (pingInBackground === false && AppState.currentState !== 'active') {
     return; // <-- Return early as we don't care about connectivity if app is not in foreground.
@@ -196,7 +204,11 @@ export function* checkInternetAccessSaga({
     timeout: pingTimeout,
     method: httpMethod,
   });
-  yield call(handleConnectivityChange, hasInternetAccess);
+  yield call(
+    handleConnectivityChange,
+    hasInternetAccess,
+    shouldDequeueSelector,
+  );
 }
 
 /**
@@ -204,15 +216,24 @@ export function* checkInternetAccessSaga({
  * - Dispatches a '@@network-connectivity/CONNECTION_CHANGE' action type
  * - Flushes the queue of pending actions if we are connected back to the internet
  * @param hasInternetAccess
+ * @param shouldDequeueSelector
  */
 export function* handleConnectivityChange(
   hasInternetAccess: boolean,
+  shouldDequeueSelector: Function = true,
 ): Generator<*, *, *> {
   const { actionQueue, isConnected } = yield select(networkSelector);
   if (isConnected !== hasInternetAccess) {
     yield put(connectionChange(hasInternetAccess));
   }
-  if (hasInternetAccess && actionQueue.length > 0) {
+
+  // If a shouldDequeueSelector selector is provided, execute it
+  let shouldDequeue = true;
+  if (shouldDequeueSelector) {
+    shouldDequeue = yield select(shouldDequeueSelector);
+  }
+
+  if (shouldDequeue && hasInternetAccess && actionQueue.length > 0) {
     // eslint-disable-next-line
     for (const action of actionQueue) {
       yield put(action);
@@ -231,6 +252,7 @@ export function* handleConnectivityChange(
  * @param pingOnlyIfOffline
  * @param pingInBackground
  * @param httpMethod
+ * @param shouldDequeueSelector
  */
 export default function* networkSaga({
   pingTimeout = DEFAULT_TIMEOUT,
@@ -240,6 +262,7 @@ export default function* networkSaga({
   pingOnlyIfOffline = false,
   pingInBackground = false,
   httpMethod = DEFAULT_HTTP_METHOD,
+  shouldDequeueSelector = undefined,
 }: Arguments = {}): Generator<*, *, *> {
   yield fork(netInfoChangeSaga, {
     pingTimeout,
@@ -248,6 +271,7 @@ export default function* networkSaga({
     pingOnlyIfOffline,
     pingInBackground,
     httpMethod,
+    shouldDequeueSelector,
   });
   if (pingInterval > 0) {
     yield fork(connectionIntervalSaga, {
@@ -257,6 +281,7 @@ export default function* networkSaga({
       pingOnlyIfOffline,
       pingInBackground,
       httpMethod,
+      shouldDequeueSelector,
     });
   }
 }
